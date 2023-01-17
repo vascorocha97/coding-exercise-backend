@@ -62,6 +62,7 @@ describe('Validation', () => {
 
         test('should have a body', () => {
             expect(response.data).not.toBeUndefined();
+            expect(response.data).toBe('test');
         });
     });
 });
