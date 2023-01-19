@@ -14,8 +14,6 @@ const dbConnection = mysql.createPool({
     password: process.env.DB_PASSWORD,
 });
 
-console.log(process.env.API_PORT);
-
 const app = express();
 app.use(bodyParser.json());
 
@@ -34,40 +32,6 @@ app.get('/health', async (req, res, next) => {
     res.json(healthStatus);
     next();
 });
-
-async function createTables(req, res, next) {
-    try {
-
-        const connection = await dbConnection.getConnection();
-
-        // Check if the campaigns table already exists
-        const [campaignsTableExists] = await connection.execute(`SHOW TABLES LIKE 'campaigns'`);
-        
-        if (!campaignsTableExists.length) {
-            // Create the campaigns table
-        
-            await connection.execute(`
-                CREATE TABLE sms_campaign (
-                    id VARCHAR(36) PRIMARY KEY,
-                    name VARCHAR(20),
-                    message VARCHAR(255),
-                    sender_name VARCHAR(20),
-                    sender_phone VARCHAR(12)
-                )
-            `);
-        }
-    } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log("Error creating tables: ", error);
-            res.status(500);
-            res.json({ error });
-        }
-    }
-}
 
 app.post('/campaigns', async (req, res, next) => {
     const campaign = req.body;
@@ -89,8 +53,91 @@ app.post('/campaigns', async (req, res, next) => {
     }
 
     // checks if table exists and only creates if it doesn't
-    await createTables(req, res, next); 
+    try {
 
+        const connection = await dbConnection.getConnection();
+
+        // Check if the campaigns table already exists
+        const [campaignsTableExists] = await connection.execute(`SHOW TABLES LIKE 'campaign'`);
+        
+        if (!campaignsTableExists.length) {
+            // Create the campaigns table
+            /* await connection.execute(`DROP TABLE sms_campaign`)
+            await connection.execute(`DROP TABLE email_campaign`) 
+            await connection.execute(`DROP TABLE on_site_campaign`) 
+            await connection.execute(`DROP TABLE voice_campaign`) 
+            await connection.execute(`DROP TABLE push_campaign`) 
+            await connection.execute(`DROP TABLE campaign`) */
+            await connection.execute(`
+                CREATE TABLE campaign (
+                    id VARCHAR(100),
+                    name VARCHAR(50),
+                    type VARCHAR(20),
+                    PRIMARY KEY (id)
+                )
+            `);
+
+            await connection.execute(`
+                CREATE TABLE sms_campaign (
+                    id VARCHAR(100) references campaign,
+                    message VARCHAR(255),
+                    sender_name VARCHAR(50),
+                    sender_phone VARCHAR(50),
+                    PRIMARY KEY (id)
+                )
+            `);
+            await connection.execute(`ALTER TABLE sms_campaign ADD CONSTRAINT FK_sms FOREIGN KEY(id) references campaign(id)`)
+            
+            await connection.execute(`
+                CREATE TABLE email_campaign (
+                    id VARCHAR(100) references campaign,
+                    message VARCHAR(255),
+                    sender_name VARCHAR(50),
+                    sender_email VARCHAR(50),
+                    PRIMARY KEY (id)
+                )
+            `);
+            await connection.execute(`ALTER TABLE email_campaign ADD CONSTRAINT FK_email FOREIGN KEY(id) references campaign(id)`)
+            
+            await connection.execute(`
+                CREATE TABLE on_site_campaign (
+                    id VARCHAR(100) references campaign,
+                    placeholder VARCHAR(255),
+                    component VARCHAR(512),
+                    width VARCHAR(10),
+                    height VARCHAR(10),
+                    PRIMARY KEY (id)
+                )
+            `);
+            await connection.execute(`ALTER TABLE on_site_campaign ADD CONSTRAINT FK_on_site FOREIGN KEY(id) references campaign(id)`)
+            
+            await connection.execute(`
+                CREATE TABLE voice_campaign (
+                    id VARCHAR(100) references campaign,
+                    audio_name VARCHAR(50),
+                    caller_id VARCHAR(50),
+                    PRIMARY KEY (id)
+                )
+            `);
+            await connection.execute(`ALTER TABLE voice_campaign ADD CONSTRAINT FK_voice FOREIGN KEY(id) references campaign(id)`)
+            
+            await connection.execute(`
+                CREATE TABLE push_campaign (
+                    id VARCHAR(100) references campaign,
+                    message VARCHAR(255),
+                    sender VARCHAR(50),
+                    PRIMARY KEY (id)
+                )
+            `);
+            await connection.execute(`ALTER TABLE push_campaign ADD CONSTRAINT FK_push FOREIGN KEY(id) references campaign(id)`)
+        }
+    } catch (error) {
+        //handle db connection errors
+        console.log("Error creating tables: ", error);
+        res.json({ error });
+        return;
+    }
+    
     const actions = {
         ['on-site']: addOnSite,
         sms: addSms,
@@ -98,9 +145,9 @@ app.post('/campaigns', async (req, res, next) => {
         voice: addVoice,
         push: addPush,
     }
+    
     const action = actions[type];
     action(req, res, next);
-    next();
 });
 
 
@@ -110,6 +157,15 @@ app.listen(port, '0.0.0.0', () => {
 
 function generateCampaignId() {
     return uuid.v4();
+}
+
+const addCampaign = async (campaignId, campaign) => {
+    const connection = await dbConnection.getConnection();
+
+    await connection.execute(
+        'INSERT INTO campaign (id, name, type) VALUES (?, ?, ?)',
+        [campaignId, campaign.name, campaign.type]
+    );
 }
 
 async function addOnSite(req, res, next) {
@@ -126,9 +182,10 @@ async function addOnSite(req, res, next) {
         //create connection to the database
         const connection = await dbConnection.getConnection();
         //prepared statement to prevent SQL injection
+        await addCampaign(campaignId, campaign)
         const [result] = await connection.execute(
-            'INSERT INTO on_site_campaign (id, name, placeholder, component, width, height) VALUES (?, ?, ?, ?, ?, ?)',
-            [campaignId, campaign.name, campaign.placeholder, campaign.component, campaign.width, campaign.height]
+            'INSERT INTO on_site_campaign (id, placeholder, component, width, height) VALUES (?, ?, ?, ?, ?)',
+            [campaignId, campaign.placeholder, campaign.component, campaign.width, campaign.height]
         );
         // check the number of rows affected by the query
         if (result.affectedRows === 1) {
@@ -139,28 +196,18 @@ async function addOnSite(req, res, next) {
             res.json({ error: 'Failed to insert campaign' });
         }
     } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log(error);
-            res.status(500);
-            res.json({ error });
-        }
+        console.log('Error ', error);
+        res.status(500);
+        res.json({ error });
     }
-    
-    next();
 }
 
 async function addSms(req, res, next) {
     const campaign = req.body;
-    
 
     //validate fields
     if (!campaign.message || !campaign.sender || !campaign.sender.name || !campaign.sender.phone) {
         res.status(400).send({ error: "Missing required fields" });
-        next();
         return;
     }
     
@@ -170,9 +217,10 @@ async function addSms(req, res, next) {
         //create connection to the database
         const connection = await dbConnection.getConnection();
         //prepared statement to prevent SQL injection
+        await addCampaign(campaignId, campaign)
         const [result] = await connection.execute(
-            'INSERT INTO sms_campaign (id, name, message, sender_name, sender_phone) VALUES (?, ?, ?, ?, ?)',
-            [campaignId, campaign.name, campaign.message, campaign.sender.name, campaign.sender.phone]
+            'INSERT INTO sms_campaign (id, message, sender_name, sender_phone) VALUES (?, ?, ?, ?)',
+            [campaignId, campaign.message, campaign.sender.name, campaign.sender.phone]
         );
         
         // check the number of rows affected by the query
@@ -184,16 +232,11 @@ async function addSms(req, res, next) {
             res.json({ error: 'Failed to insert campaign' });
         }
     } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log(error);
-            res.status(500);
-            res.json({ error });
-        }
+        console.log(error);
+        res.status(500);
+        res.json({ error });
     }
+    next();
 }
 
 async function addEmail(req, res, next) {
@@ -211,9 +254,10 @@ async function addEmail(req, res, next) {
         //create connection to the database
         const connection = await dbConnection.getConnection();
         //prepared statement to prevent SQL injection
+        await addCampaign(campaignId, campaign)
         const [result] = await connection.execute(
-            'INSERT INTO email_campaign (id, name, message, sender_name, sender_email) VALUES (?, ?, ?, ?, ?)',
-            [campaignId, campaign.name, campaign.message, campaign.sender.name, campaign.sender.email]
+            'INSERT INTO email_campaign (id,message, sender_name, sender_email) VALUES (?, ?, ?, ?)',
+            [campaignId, campaign.message, campaign.sender.name, campaign.sender.email]
         );
         // check the number of rows affected by the query
         if (result.affectedRows === 1) {
@@ -224,15 +268,9 @@ async function addEmail(req, res, next) {
             res.json({ error: 'Failed to insert campaign' });
         }
     } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log(error);
-            res.status(500);
-            res.json({ error });
-        }
+        console.log('Error ', error);
+        res.status(500);
+        res.json({ error });
     }
 }
 
@@ -251,9 +289,10 @@ async function addVoice(req, res, next) {
         //create connection to the database
         const connection = await dbConnection.getConnection();
         //prepared statement to prevent SQL injection
+        await addCampaign(campaignId, campaign)
         const [result] = await connection.execute(
-            'INSERT INTO voice_campaign (id, name, audio_name, caller_id) VALUES (?, ?, ?, ?)',
-            [campaignId, campaign.name, campaign.audio_name, campaign.caller_id]
+            'INSERT INTO voice_campaign (id, audio_name, caller_id) VALUES (?, ?, ?)',
+            [campaignId, campaign.audio_name, campaign.caller_id]
         );
         // check the number of rows affected by the query
         if (result.affectedRows === 1) {
@@ -264,15 +303,9 @@ async function addVoice(req, res, next) {
             res.json({ error: 'Failed to insert campaign' });
         }
     } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log(error);
-            res.status(500);
-            res.json({ error });
-        }
+        console.log('Error ', error);
+        res.status(500);
+        res.json({ error });
     }
 }
 
@@ -291,9 +324,10 @@ async function addPush(req, res, next) {
         //create connection to the database
         const connection = await dbConnection.getConnection();
         //prepared statement to prevent SQL injection
+        await addCampaign(campaignId, campaign)
         const [result] = await connection.execute(
-            'INSERT INTO push_campaign (id, name, message, sender) VALUES (?, ?, ?, ?)',
-            [campaignId, campaign.name, campaign.message, campaign.sender]
+            'INSERT INTO push_campaign (id, message, sender) VALUES (?, ?, ?)',
+            [campaignId, campaign.message, campaign.sender]
         );
         // check the number of rows affected by the query
         if (result.affectedRows === 1) {
@@ -304,18 +338,11 @@ async function addPush(req, res, next) {
             res.json({ error: 'Failed to insert campaign' });
         }
     } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log(error);
-            res.status(500);
-            res.json({ error });
-        }
+        console.log('Error ', error);
+        res.status(500);
+        res.json({ error });
     }
 }
-
 
 app.get('/campaigns/:id', async (req, res, next) => {
     const campaignId = req.params.id;
@@ -324,27 +351,42 @@ app.get('/campaigns/:id', async (req, res, next) => {
         //create connection to the database
         const connection = await dbConnection.getConnection();
         //prepared statement to prevent SQL injection
-        const [rows] = await connection.execute(
-            'SELECT * FROM campaigns WHERE id = ?',
+        const [campaign] = await connection.execute(
+            'SELECT type FROM campaign WHERE id = ?',
             [campaignId]
         );
+
+        if (campaign.length === 0) {
+            res.status(404);
+            res.json({ error: 'Campaign not found' });
+            return;
+        }
+        const tableByType = {
+            ['on-site']: 'on_site_campaign',
+            sms: 'sms_campaign',
+            email: 'email_campaign',
+            voice: 'voice_campaign',
+            push: 'push_campaign',
+        }
+
+        const table = tableByType[campaign[0].type]
+
+        const [data] = await connection.execute(
+           `SELECT * FROM campaign RIGHT JOIN ${table} ON campaign.id = ${table}.id WHERE campaign.id = ?`,
+            [campaignId]
+        );
+    
         // check if a campaign was found
-        if (rows.length === 0) {
+        if (data.length === 0) {
             res.status(404);
             res.json({ error: 'Campaign not found' });
         } else {
             res.status(200);
-            res.json(rows[0]);
+            res.json(data[0]);
         }
     } catch (error) {
-        //handle db connection errors
-        if (error instanceof dbConnection.ConnectionError) {
-            res.status(500);
-            res.json({ error: 'Failed to connect to the database' });
-        } else {
-            console.log(error);
-            res.status(500);
-            res.json({ error });
-        }
-    } 
+        console.log('Error ', error);
+        res.status(500);
+        res.json({ error });
+    }
   });
